@@ -24,6 +24,7 @@ function checkChromiumInstalled(): void {
 }
 
 let context: BrowserContext | null = null;
+const CDP_ENDPOINT = process.env.PPLX_CDP_ENDPOINT ?? "http://localhost:9222";
 
 export async function launchBrowser(): Promise<void> {
   checkChromiumInstalled();
@@ -32,16 +33,23 @@ export async function launchBrowser(): Promise<void> {
     context = null;
   }
 
-  context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: false,
-    viewport: { width: 1280, height: 800 },
-    args: [
-      "--no-sandbox",
-      "--disable-blink-features=AutomationControlled",
-      "--window-position=0,0",
-      "--no-focus-on-map",
-    ],
-  });
+  try {
+    const browser = await chromium.connectOverCDP(CDP_ENDPOINT);
+    context = browser.contexts()[0] ?? (await browser.newContext());
+    console.error(`[perplexity-web-mcp] Connected to persistent browser at ${CDP_ENDPOINT}`);
+  } catch {
+    console.error(`[perplexity-web-mcp] No persistent browser at ${CDP_ENDPOINT}; launching own instance.`);
+    context = await chromium.launchPersistentContext(PROFILE_DIR, {
+      headless: false,
+      viewport: { width: 1280, height: 800 },
+      args: [
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--window-position=0,0",
+        "--no-focus-on-map",
+      ],
+    });
+  }
 }
 
 export async function ensureBrowser(): Promise<void> {
