@@ -26,12 +26,14 @@ function checkChromiumInstalled(): void {
 let context: BrowserContext | null = null;
 const CDP_ENDPOINT = process.env.PPLX_CDP_ENDPOINT ?? "http://localhost:9222";
 
+function isClosedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /closed|Target page/i.test(msg);
+}
+
 export async function launchBrowser(): Promise<void> {
   checkChromiumInstalled();
-  if (context) {
-    await context.close();
-    context = null;
-  }
+  await closeBrowser();
 
   try {
     const browser = await chromium.connectOverCDP(CDP_ENDPOINT);
@@ -52,8 +54,26 @@ export async function launchBrowser(): Promise<void> {
   }
 }
 
+/**
+ * True only if a context exists AND its underlying browser is still connected.
+ * A stale `context` after the browser dies is what used to wedge the MCP —
+ * `ensureBrowser()` saw it as non-null and never relaunched, so every
+ * `newPage()` threw "Target page, context or browser has been closed".
+ */
+async function isAlive(): Promise<boolean> {
+  if (!context) return false;
+  try {
+    context.pages();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureBrowser(): Promise<void> {
-  if (!context) await launchBrowser();
+  if (await isAlive()) return;
+  context = null;
+  await launchBrowser();
 }
 
 export function getContext(): BrowserContext {
@@ -61,18 +81,36 @@ export function getContext(): BrowserContext {
   return context;
 }
 
+/** Runs `fn`, relaunching once if the browser died between calls. */
+async function withRetry<T>(fn: (ctx: BrowserContext) => Promise<T>): Promise<T> {
+  try {
+    return await fn(getContext());
+  } catch (err) {
+    if (!isClosedError(err)) throw err;
+    context = null;
+    await launchBrowser();
+    return await fn(getContext());
+  }
+}
+
 export async function newSearchPage(): Promise<Page> {
-  return getContext().newPage();
+  return withRetry((ctx) => ctx.newPage());
 }
 
 export async function getFirstPage(): Promise<Page> {
-  const ctx = getContext();
-  return ctx.pages()[0] ?? ctx.newPage();
+  return withRetry(async (ctx) => {
+    const pages = ctx.pages();
+    return pages[0] ?? (await ctx.newPage());
+  });
 }
 
 export async function closeBrowser(): Promise<void> {
   if (context) {
-    await context.close();
+    try {
+      await context.close();
+    } catch {
+      // already closed
+    }
     context = null;
   }
 }
