@@ -49,6 +49,11 @@ export async function launchBrowser(): Promise<void> {
         "--disable-blink-features=AutomationControlled",
         "--window-position=0,0",
         "--no-focus-on-map",
+        // Exposes CDP on the same port this file's own connectOverCDP attempt looks
+        // for, so a later restart of this process (or an external diagnostic script)
+        // can attach to this same browser instance instead of only being able to
+        // inspect it from inside this process's own Playwright objects.
+        "--remote-debugging-port=9222",
       ],
     });
   }
